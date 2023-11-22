@@ -20,7 +20,7 @@ namespace UniGLTF
 
         [SerializeField]
         [Header("Experimental")]
-        public RenderPipelineTypes m_renderPipeline;
+        public RenderPipelineTypes m_renderPipeline = UniGLTF.RenderPipelineTypes.UniversalRenderPipeline;
 
         void OnValidate()
         {
