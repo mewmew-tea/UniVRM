@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.UIElements;
 using VRMShaders;
 
 namespace UniGLTF.MeshUtility
@@ -126,14 +127,9 @@ namespace UniGLTF.MeshUtility
         /// </summary>
         /// <param name="src"></param>
         /// <param name="boneMap">正規化前のボーンから正規化後のボーンを得る</param>
-        /// <param name="dstLocalToWorldMatrix"></param>
         /// <returns></returns>
         /// <exception cref="Exception"></exception>
-        public static (Mesh, Transform[]) NormalizeSkinnedMesh(
-            SkinnedMeshRenderer src,
-            Dictionary<Transform, Transform> boneMap,
-            Matrix4x4 dstLocalToWorldMatrix,
-            bool FreezeBlendShape = true)
+        public static Mesh NormalizeSkinnedMesh(SkinnedMeshRenderer src)
         {
             if (src == null
                 || !src.enabled
@@ -147,19 +143,14 @@ namespace UniGLTF.MeshUtility
             var srcMesh = src.sharedMesh;
             var originalSrcMesh = srcMesh;
 
-            // 元の Transform[] bones から、無効なboneを取り除いて前に詰めた配列を作る
-            var dstBones = src.bones
-                .Where(x => x != null && boneMap.ContainsKey(x))
-                .Select(x => boneMap[x])
-                .ToArray();
-
             var hasBoneWeight = src.bones != null && src.bones.Length > 0;
             if (!hasBoneWeight)
             {
                 // Before bake, bind no weight bones
-                //Debug.LogFormat("no weight: {0}", srcMesh.name);
 
                 srcMesh = srcMesh.Copy(true);
+                srcMesh.ApplyRotationAndScale(src.transform.localToWorldMatrix, false);
+
                 var bw = new BoneWeight
                 {
                     boneIndex0 = 0,
@@ -172,22 +163,10 @@ namespace UniGLTF.MeshUtility
                     weight3 = 0.0f,
                 };
                 srcMesh.boneWeights = Enumerable.Range(0, srcMesh.vertexCount).Select(x => bw).ToArray();
-                srcMesh.bindposes = new Matrix4x4[] { Matrix4x4.identity };
+                src.bones = new[] { src.rootBone ?? src.transform };
+                srcMesh.bindposes = src.bones.Select(x => x.worldToLocalMatrix).ToArray();
 
-                src.rootBone = src.transform;
-                dstBones = new[] { boneMap[src.transform] };
-                src.bones = new[] { src.transform };
                 src.sharedMesh = srcMesh;
-            }
-
-            var blendShapeBackup = new List<float>();
-            if (!FreezeBlendShape)
-            {
-                for (int i = 0; i < srcMesh.blendShapeCount; ++i)
-                {
-                    blendShapeBackup.Add(src.GetBlendShapeWeight(i));
-                    src.SetBlendShapeWeight(i, 0);
-                }
             }
 
             // BakeMesh
@@ -195,35 +174,24 @@ namespace UniGLTF.MeshUtility
             mesh.name = srcMesh.name + ".baked";
             src.BakeMesh(mesh);
 
-            // 新しい骨格のボーンウェイトを作成する
-            mesh.boneWeights = MapBoneWeight(srcMesh.boneWeights, boneMap, src.bones, dstBones);
+            mesh.boneWeights = srcMesh.boneWeights;
 
-            // recalc bindposes
-            mesh.bindposes = dstBones.Select(x => x.worldToLocalMatrix * dstLocalToWorldMatrix).ToArray();
-
-            //var m = src.localToWorldMatrix; // include scaling
-            var m = default(Matrix4x4);
-            m.SetTRS(Vector3.zero, src.transform.rotation, Vector3.one); // rotation only
-            mesh.ApplyMatrix(m);
+            {
+                // apply SkinnedMesh.transform rotation
+                var m = Matrix4x4.TRS(Vector3.zero, src.transform.rotation, Vector3.one);
+                mesh.ApplyMatrix(m);
+            }
 
             //
             // BlendShapes
             //
-            CopyBlendShapes(src, srcMesh, mesh, m);
-
-            for (int i = 0; i < blendShapeBackup.Count; ++i)
             {
-                src.SetBlendShapeWeight(i, blendShapeBackup[i]);
+                var m = src.localToWorldMatrix; // include scaling
+                m.SetColumn(3, new Vector4(0, 0, 0, 1)); // no translation
+                CopyBlendShapes(src, srcMesh, mesh, m);
             }
 
-            if (!hasBoneWeight)
-            {
-                // restore bones
-                src.bones = new Transform[] { };
-                src.sharedMesh = originalSrcMesh;
-            }
-
-            return (mesh, dstBones);
+            return mesh;
         }
 
         private static void CopyBlendShapes(SkinnedMeshRenderer src, Mesh srcMesh, Mesh mesh, Matrix4x4 m)
@@ -296,7 +264,7 @@ namespace UniGLTF.MeshUtility
                     }
                     else
                     {
-                        vertices[j] = m.MultiplyPoint(vertices[j]) - meshVertices[j];
+                        vertices[j] = m.MultiplyPoint(vertices[j] - meshVertices[j]);
                     }
                 }
 
@@ -363,7 +331,7 @@ namespace UniGLTF.MeshUtility
             }
         }
 
-        public static Mesh NormalizeNoneSkinnedMesh(MeshRenderer srcRenderer)
+        public static Mesh NormalizeNoneSkinnedMesh(MeshRenderer srcRenderer, bool freezeRotation)
         {
             if (srcRenderer == null || !srcRenderer.enabled)
             {
@@ -380,7 +348,15 @@ namespace UniGLTF.MeshUtility
 
             var dstMesh = srcFilter.sharedMesh.Copy(false);
             // Meshに乗っているボーンの姿勢を適用する
-            dstMesh.ApplyRotationAndScale(srcRenderer.transform.localToWorldMatrix);
+            if (freezeRotation)
+            {
+                dstMesh.ApplyRotationAndScale(srcRenderer.transform.localToWorldMatrix);
+            }
+            else
+            {
+                var (t, r, s) = srcRenderer.transform.localToWorldMatrix.Decompose();
+                dstMesh.ApplyRotationAndScale(Matrix4x4.TRS(t, Quaternion.identity, s));
+            }
             return dstMesh;
         }
     }

@@ -1,97 +1,135 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using UniGLTF.MeshUtility;
 using UniHumanoid;
 using UnityEngine;
-using VRMShaders;
+
 
 namespace UniVRM10
 {
-    /// <summary>
-    /// - Freeze
-    /// - Integration
-    /// - Split
-    /// 
-    /// - Implement runtime logic => Process a hierarchy in scene. Do not process prefab.
-    /// - Implement undo
-    ///
-    /// </summary>
-    public class Vrm10MeshUtility
+    public class Vrm10MeshUtility : UniGLTF.MeshUtility.GltfMeshUtility
     {
-        /// <summary>
-        /// GameObject 名が重複している場合にリネームする。
-        /// 最初に実行(Avatar生成時のエラーを回避？)
-        /// </summary>
-        public bool ForceUniqueName = false;
-
-        /// <summary>
-        /// Same as VRM-0 normalization
-        /// - Mesh
-        /// - Node
-        /// - InverseBindMatrices
-        /// </summary>
-        public bool FreezeBlendShape = false;
-
-        /// <summary>
-        /// Same as VRM-0 normalization
-        /// - Mesh
-        /// - Node
-        /// - InverseBindMatrices
-        /// </summary>
-        public bool FreezeScaling = true;
-
-        /// <summary>
-        /// Same as VRM-0 normalization
-        /// - Mesh
-        /// - Node
-        /// - InverseBindMatrices
-        /// </summary>
-        public bool FreezeRotation = false;
-
-        public List<MeshIntegrationGroup> MeshIntegrationGroups = new List<MeshIntegrationGroup>();
-
-        /// <summary>
-        /// Create a headless model and solve VRM.FirstPersonFlag.Auto
-        /// </summary>
-        public bool GenerateMeshForFirstPersonAuto = false;
-
-        /// <summary>
-        /// Split into having and not having BlendShape
-        /// </summary>
-        public bool SplitByBlendShape = false;
-
-        public void IntegrateAll(GameObject root)
+        public Vrm10MeshUtility()
         {
-            if (root == null)
-            {
-                return;
-            }
-            MeshIntegrationGroups.Add(new MeshIntegrationGroup
-            {
-                Name = "ALL",
-                Renderers = root.GetComponentsInChildren<Renderer>().ToList(),
-            });
+            FreezeBlendShapeRotationAndScaling = true;
         }
 
-        MeshIntegrationGroup GetOrCreateGroup(string name)
+        bool _generateFirstPerson = false;
+        public override IEnumerable<UniGLTF.MeshUtility.MeshIntegrationGroup> CopyInstantiate(GameObject go, GameObject instance)
         {
-            foreach (var g in MeshIntegrationGroups)
+            var copy = base.CopyInstantiate(go, instance);
+            _generateFirstPerson = false;
+            if (GenerateMeshForFirstPersonAuto)
             {
-                if (g.Name == name)
+                foreach (var g in copy)
                 {
-                    return g;
+                    if (g.Name == "auto")
+                    {
+                        _generateFirstPerson = true;
+                        // 元のメッシュを三人称に変更
+                        yield return new UniGLTF.MeshUtility.MeshIntegrationGroup
+                        {
+                            Name = UniGLTF.Extensions.VRMC_vrm.FirstPersonType.thirdPersonOnly.ToString(),
+                            IntegrationType = UniGLTF.MeshUtility.MeshIntegrationGroup.MeshIntegrationTypes.ThirdPersonOnly,
+                            Renderers = g.Renderers.ToList(),
+                        };
+                    }
+                    yield return g;
                 }
             }
-            MeshIntegrationGroups.Add(new MeshIntegrationGroup
+            else
             {
-                Name = name,
-            });
-            return MeshIntegrationGroups.Last();
+                foreach (var g in copy)
+                {
+                    yield return g;
+                }
+            }
         }
 
-        public void IntegrateFirstPerson(GameObject root)
+        protected override
+         bool TryIntegrate(
+            GameObject empty,
+            UniGLTF.MeshUtility.MeshIntegrationGroup group,
+            out (UniGLTF.MeshUtility.MeshIntegrationResult, GameObject[]) resultAndAdded)
         {
+            if (!base.TryIntegrate(empty, group, out resultAndAdded))
+            {
+                return false;
+            }
+            var (result, newList) = resultAndAdded;
+
+            if (_generateFirstPerson && group.Name == nameof(UniGLTF.Extensions.VRMC_vrm.FirstPersonType.auto))
+            {
+                // Mesh 統合の後処理
+                // FirstPerson == "auto" の場合に                
+                // 頭部の無いモデルを追加で作成する
+                Debug.Log("generateFirstPerson");
+                if (result.Integrated.Mesh != null)
+                {
+                    // BlendShape 有り
+                    _ProcessFirstPerson(_vrmInstance.Humanoid.Head, result.Integrated.IntegratedRenderer);
+                }
+                if (result.IntegratedNoBlendShape.Mesh != null)
+                {
+                    // BlendShape 無しの方
+                    _ProcessFirstPerson(_vrmInstance.Humanoid.Head, result.IntegratedNoBlendShape.IntegratedRenderer);
+                }
+            }
+            return true;
+        }
+
+        private void _ProcessFirstPerson(Transform firstPersonBone, SkinnedMeshRenderer smr)
+        {
+            var task = VRM10ObjectFirstPerson.CreateErasedMeshAsync(
+                smr,
+                firstPersonBone,
+                new VRMShaders.ImmediateCaller());
+            task.Wait();
+            var mesh = task.Result;
+            if (mesh != null)
+            {
+                smr.sharedMesh = mesh;
+                smr.name = "auto.headless";
+            }
+            else
+            {
+                Debug.LogWarning("no result");
+            }
+        }
+
+        Vrm10Instance _vrmInstance = null;
+        /// <summary>
+        /// glTF に比べて Humanoid や FirstPerson の処理が追加される
+        /// </summary>
+        public override (List<UniGLTF.MeshUtility.MeshIntegrationResult>, List<GameObject>) Process(
+            GameObject target, IEnumerable<UniGLTF.MeshUtility.MeshIntegrationGroup> groupCopy)
+        {
+            _vrmInstance = target.GetComponent<Vrm10Instance>();
+            if (_vrmInstance == null)
+            {
+                throw new ArgumentException();
+            }
+
+            // TODO: update: spring
+            // TODO: update: constraint
+            // TODO: update: firstPerson offset
+            var (list, newList) = base.Process(target, groupCopy);
+
+            if (FreezeBlendShapeRotationAndScaling)
+            {
+                var animator = target.GetComponent<Animator>();
+                var newAvatar = AvatarDescription.RecreateAvatar(animator);
+                GameObject.DestroyImmediate(animator);
+                animator = target.AddComponent<Animator>();
+                animator.avatar = newAvatar;
+            }
+
+            return (list, newList);
+        }
+
+        public override void UpdateMeshIntegrationGroups(GameObject root)
+        {
+            MeshIntegrationGroups.Clear();
             if (root == null)
             {
                 return;
@@ -113,201 +151,15 @@ namespace UniVRM10
             }
             foreach (var a in fp.Renderers)
             {
-                var g = GetOrCreateGroup(a.FirstPersonFlag.ToString());
+                var g = _GetOrCreateGroup(a.FirstPersonFlag.ToString());
                 g.Renderers.Add(a.GetRenderer(root.transform));
             }
-        }
 
-        void RemoveComponent<T>(T c) where T : Component
-        {
-            if (c == null)
+            var orphan = root.GetComponentsInChildren<Renderer>().Where(x => !_HasRenderer(x)).ToArray();
+            if (orphan.Length > 0)
             {
-                return;
-            }
-            var t = c.transform;
-            if (Application.isPlaying)
-            {
-                GameObject.Destroy(c);
-            }
-            else
-            {
-                GameObject.DestroyImmediate(c);
-            }
-
-            if (t.childCount == 0)
-            {
-                var list = t.GetComponents<Component>();
-                // Debug.Log($"{list[0].GetType().Name}");
-                if (list.Length == 1 && list[0] == t)
-                {
-                    if (Application.isPlaying)
-                    {
-                        GameObject.Destroy(t.gameObject);
-                    }
-                    else
-                    {
-                        GameObject.DestroyImmediate(t.gameObject);
-                    }
-                }
-            }
-        }
-
-        static GameObject GetOrCreateEmpty(GameObject go, string name)
-        {
-            foreach (var child in go.transform.GetChildren())
-            {
-                if (child.name == name
-                 && child.localPosition == Vector3.zero
-                 && child.localScale == Vector3.one
-                 && child.localRotation == Quaternion.identity)
-                {
-                    return child.gameObject;
-                }
-            }
-            var empty = new GameObject(name);
-            empty.transform.SetParent(go.transform, false);
-            return empty;
-        }
-
-        public List<GameObject> Process(GameObject go)
-        {
-            var vrmInstance = go.GetComponent<Vrm10Instance>();
-            if (vrmInstance == null)
-            {
-                throw new ArgumentException();
-            }
-
-            // TODO unpack prefab
-
-            if (ForceUniqueName)
-            {
-                throw new NotImplementedException();
-
-                // 必用？
-                var animator = go.GetComponent<Animator>();
-                var newAvatar = AvatarDescription.RecreateAvatar(animator);
-                animator.avatar = newAvatar;
-            }
-
-            // 正規化されたヒエラルキーを作る
-            if (FreezeBlendShape || FreezeRotation || FreezeScaling)
-            {
-                // TODO: UNDO            
-                var (normalized, boneMap) = BoneNormalizer.NormalizeHierarchyFreezeMesh(go,
-                    removeScaling: FreezeScaling,
-                    removeRotation: FreezeRotation,
-                    freezeBlendShape: FreezeBlendShape);
-
-                // TODO: update: spring
-                // TODO: update: constraint
-                // TODO: update: firstPerson offset
-
-                // write back normalized transform to boneMap
-                BoneNormalizer.WriteBackResult(go, normalized, boneMap);
-                if (Application.isPlaying)
-                {
-                    GameObject.Destroy(normalized);
-                }
-                else
-                {
-                    GameObject.DestroyImmediate(normalized);
-                }
-
-                var animator = go.GetComponent<Animator>();
-                var newAvatar = AvatarDescription.RecreateAvatar(animator);
-                animator.avatar = newAvatar;
-            }
-
-            var copy = new List<MeshIntegrationGroup>();
-            var generateFirstPerson = false;
-            if (GenerateMeshForFirstPersonAuto)
-            {
-                foreach (var g in MeshIntegrationGroups)
-                {
-                    if (g.Name == "auto")
-                    {
-                        generateFirstPerson = true;
-                        // 元のメッシュを三人称に変更
-                        copy.Add(new MeshIntegrationGroup
-                        {
-                            Name = UniGLTF.Extensions.VRMC_vrm.FirstPersonType.thirdPersonOnly.ToString(),
-                            Renderers = g.Renderers.ToList(),
-                        });
-                    }
-                    copy.Add(g);
-                }
-            }
-            else
-            {
-                copy.AddRange(MeshIntegrationGroups);
-            }
-
-            var newGo = new List<GameObject>();
-            {
-                var empty = GetOrCreateEmpty(go, "mesh");
-
-                var results = new List<MeshIntegrationResult>();
-                foreach (var group in copy)
-                {
-                    var result = MeshIntegrator.Integrate(group, SplitByBlendShape
-                        ? MeshIntegrator.BlendShapeOperation.Split
-                        : MeshIntegrator.BlendShapeOperation.Use);
-                    results.Add(result);
-
-                    foreach (var created in result.AddIntegratedRendererTo(empty))
-                    {
-                        newGo.Add(created);
-                    }
-
-                    if (generateFirstPerson && group.Name == "auto")
-                    {
-                        Debug.Log("generateFirstPerson");
-                        if (result.Integrated.Mesh != null)
-                        {
-                            ProcessFirstPerson(vrmInstance, result.Integrated);
-                        }
-                        if (result.IntegratedNoBlendShape.Mesh != null)
-                        {
-                            ProcessFirstPerson(vrmInstance, result.IntegratedNoBlendShape);
-                        }
-                    }
-                }
-
-                foreach (var result in results)
-                {
-                    foreach (var r in result.SourceMeshRenderers)
-                    {
-                        RemoveComponent(r);
-                    }
-                    foreach (var r in result.SourceSkinnedMeshRenderers)
-                    {
-                        RemoveComponent(r);
-                    }
-                }
-            }
-
-            MeshIntegrationGroups.Clear();
-
-            return newGo;
-        }
-
-        void ProcessFirstPerson(Vrm10Instance vrmInstance, MeshInfo info)
-        {
-            var firstPersonBone = vrmInstance.Humanoid.Head;
-            var task = VRM10ObjectFirstPerson.CreateErasedMeshAsync(
-                info.IntegratedRenderer,
-                firstPersonBone,
-                new ImmediateCaller());
-            task.Wait();
-
-            if (task.Result != null)
-            {
-                info.IntegratedRenderer.sharedMesh = task.Result;
-                info.IntegratedRenderer.name = "auto.headless";
-            }
-            else
-            {
-                Debug.LogWarning("no result");
+                var g = _GetOrCreateGroup("both");
+                g.Renderers.AddRange(orphan);
             }
         }
     }

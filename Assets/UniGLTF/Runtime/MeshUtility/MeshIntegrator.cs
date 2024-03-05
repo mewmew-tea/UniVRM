@@ -64,7 +64,7 @@ namespace UniGLTF.MeshUtility
             foreach (var x in BlendShapes)
             {
                 //Debug.LogFormat("AddBlendShapeFrame: {0}", kv.Key);
-                mesh.AddBlendShapeFrame(x.Name, 1,
+                mesh.AddBlendShapeFrame(x.Name, 100.0f,
                     x.Positions.ToArray(),
                     x.Normals.ToArray(),
                     x.Tangents.ToArray());
@@ -128,11 +128,10 @@ namespace UniGLTF.MeshUtility
                 })
             );
 
-            var self = renderer.transform;
-            var bone = self.parent;
+            var bone = renderer.transform;
             if (bone == null)
             {
-                Debug.LogWarningFormat("{0} is root gameobject.", self.name);
+                Debug.LogWarningFormat("{0} is root gameobject.", bone.name);
                 return;
             }
             var boneIndex = AddBoneIfUnique(bone);
@@ -275,7 +274,8 @@ namespace UniGLTF.MeshUtility
             return found;
         }
 
-        public static MeshIntegrationResult Integrate(MeshIntegrationGroup group, BlendShapeOperation op)
+        public static bool TryIntegrate(MeshIntegrationGroup group, BlendShapeOperation op,
+        out MeshIntegrationResult result)
         {
             var integrator = new MeshUtility.MeshIntegrator();
             foreach (var x in group.Renderers)
@@ -289,7 +289,15 @@ namespace UniGLTF.MeshUtility
                     integrator.Push(mr);
                 }
             }
-            return integrator.Integrate(group.Name, op);
+            result = integrator.Integrate(group.Name, op);
+            if (result.Integrated != null || result.IntegratedNoBlendShape != null)
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         delegate bool TriangleFilter(int i0, int i1, int i2);
@@ -329,8 +337,14 @@ namespace UniGLTF.MeshUtility
             mesh.vertices = Positions.ToArray();
             mesh.normals = Normals.ToArray();
             mesh.uv = UV.ToArray();
-            mesh.tangents = Tangents.ToArray();
-            mesh.boneWeights = BoneWeights.ToArray();
+            if (Tangents != null && Tangents.Count == Positions.Count)
+            {
+                mesh.tangents = Tangents.ToArray();
+            }
+            if (BoneWeights != null && BoneWeights.Count == Positions.Count)
+            {
+                mesh.boneWeights = BoneWeights.ToArray();
+            }
 
             int subMeshCount = 0;
             foreach (var submesh in SubMeshes)
@@ -351,7 +365,7 @@ namespace UniGLTF.MeshUtility
             return mesh;
         }
 
-        public MeshIntegrationResult Integrate(string name, BlendShapeOperation op)
+        MeshIntegrationResult Integrate(string name, BlendShapeOperation op)
         {
             if (_Bones.Count != _BindPoses.Count)
             {

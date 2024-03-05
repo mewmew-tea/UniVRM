@@ -24,11 +24,11 @@ namespace VRM
         private static void ImportFromVrmFile() => VRMImporterMenu.OpenImportMenu();
 
 
-        [MenuItem(UserMenuPrefix + "/" + VrmMeshIntegratorWizard.MENU_NAME, false, 3)]
-        private static void OpenMeshIntegratorWizard() => VrmMeshIntegratorWizard.CreateWizard();
+        [MenuItem(UserMenuPrefix + "/" + VrmMeshIntegratorWizard.MENU_NAME, false, 51)]
+        private static void OpenMeshIntegratorWizard() => VrmMeshIntegratorWizard.OpenWindow();
 
 
-        [MenuItem(UserMenuPrefix + "/" + VRMHumanoidNormalizerMenu.MENU_NAME, true, 51)]
+        [MenuItem(UserMenuPrefix + "/" + VRMHumanoidNormalizerMenu.MENU_NAME, true, 52)]
         private static bool FreezeTPoseValidation() => VRMHumanoidNormalizerMenu.NormalizeValidation();
         [MenuItem(UserMenuPrefix + "/" + VRMHumanoidNormalizerMenu.MENU_NAME, false, 52)]
         private static void FreezeTPose() => VRMHumanoidNormalizerMenu.Normalize();
@@ -43,7 +43,7 @@ namespace VRM
         [MenuItem(UserMenuPrefix + "/" + VRMSpringBoneUtilityEditor.LOAD_MENU_NAME, true, 54)]
         private static bool LoadSpringBoneFromJsonValidation() => VRMSpringBoneUtilityEditor.LoadSpringBoneFromJsonValidation();
         [MenuItem(UserMenuPrefix + "/" + VRMSpringBoneUtilityEditor.LOAD_MENU_NAME, false, 54)]
-
+        private static void LoadSpringBoneFromJson() => VRMSpringBoneUtilityEditor.LoadSpringBoneFromJson();
 
 #if VRM_DEVELOP
         [MenuItem(DevelopmentMenuPrefix + "/Generate Serialization Code", false, 91)]
